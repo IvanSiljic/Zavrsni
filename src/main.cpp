@@ -8,16 +8,29 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <camera.h>
 #include <shader.h>
 
 #include <iostream>
 
-void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+void framebufferSizeCallback(GLFWwindow* window, int width, int height);
+void mouseCallback(GLFWwindow* window, double xPos, double yPos);
+void scrollCallback(GLFWwindow* window, double xOffset, double yOffset);
 void processInput(GLFWwindow *window);
 
 // settings
 constexpr unsigned int SCR_WIDTH = 800;
 constexpr unsigned int SCR_HEIGHT = 600;
+
+// camera
+Camera camera(glm::vec3(0.0f, 0.0f, 3.0f));
+float lastX = SCR_WIDTH / 2.0f;
+float lastY = SCR_HEIGHT / 2.0f;
+bool firstMouse = true;
+
+// timing
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
 
 int main() {
     // glfw: initialize and configure
@@ -40,7 +53,12 @@ int main() {
         return -1;
     }
     glfwMakeContextCurrent(window);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+    glfwSetCursorPosCallback(window, mouseCallback);
+    glfwSetScrollCallback(window, scrollCallback);
+
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
@@ -53,9 +71,9 @@ int main() {
     // -----------------------------
     glEnable(GL_DEPTH_TEST);
 
-    // build and compile our shader program
+    // build and compile shader program
     // ------------------------------------
-    Shader ourShader("assets/shaders/vertex.glsl", "assets/shaders/fragment.glsl");
+    const Shader ourShader("assets/shaders/vertex.glsl", "assets/shaders/fragment.glsl");
 
     // set up vertex data (and buffer(s)) and configure vertex attributes
     // ------------------------------------------------------------------
@@ -128,12 +146,12 @@ int main() {
     // position attribute
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    // color attribute
+    // texture coord attribute
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // load and create a texture 
-    // -------------------------
+    // Texture loading
+    // ---------------
     unsigned int texture;
     // texture 
     // ---------
@@ -161,12 +179,18 @@ int main() {
 
     // tell opengl for each sampler to which texture unit it belongs to (only has to be done once)
     // -------------------------------------------------------------------------------------------
-    ourShader.use(); // don't forget to activate/use the shader before setting uniforms!
+    ourShader.use();
     ourShader.setInt("tex", 0);
 
     // render loop
     // -----------
     while (!glfwWindowShouldClose(window)) {
+        // per-frame time logic
+        // --------------------
+        const auto currentFrame = static_cast<float>(glfwGetTime());
+        deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
+
         // input
         // -----
         processInput(window);
@@ -180,13 +204,12 @@ int main() {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
 
-        // create transformations
-        glm::mat4 view          = glm::mat4(1.0f); // make sure to initialize matrix to identity matrix first
-        glm::mat4 projection    = glm::mat4(1.0f);
-        projection = glm::perspective(glm::radians(90.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-        view       = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f));
-        // pass transformation matrices to the shader
-        ourShader.setMat4("projection", projection); // note: currently we set the projection matrix each frame, but since the projection matrix rarely changes it's often best practice to set it outside the main loop only once.
+        ourShader.use();
+
+        glm::mat4 projection= glm::perspective(glm::radians(camera.Zoom), static_cast<float>(SCR_WIDTH) / static_cast<float>(SCR_HEIGHT), 0.1f, 100.0f);
+        ourShader.setMat4("projection", projection);
+
+        glm::mat4 view = camera.GetViewMatrix();
         ourShader.setMat4("view", view);
 
         // render boxes
@@ -194,9 +217,9 @@ int main() {
         for (unsigned int i = 0; i < 10; i++)
         {
             // calculate the model matrix for each object and pass it to shader before drawing
-            glm::mat4 model = glm::mat4(1.0f);
+            auto model = glm::mat4(1.0f);
             model = glm::translate(model, cubePositions[i]);
-            float angle = 20.0f * i;
+            const float angle = 20.0f * static_cast<float>(i);
             model = glm::rotate(model, glm::radians(angle), glm::vec3(1.0f, 0.3f, 0.5f));
             ourShader.setMat4("model", model);
 
@@ -225,13 +248,46 @@ int main() {
 void processInput(GLFWwindow *window) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+
+    // Movement
+    // --------
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        camera.ProcessKeyboard(FORWARD, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        camera.ProcessKeyboard(BACKWARD, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        camera.ProcessKeyboard(LEFT, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        camera.ProcessKeyboard(RIGHT, deltaTime);
 }
 
 // glfw: whenever the window size changed (by OS or user resize) this callback function executes
 // ---------------------------------------------------------------------------------------------
-void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
     // make sure the viewport matches the new window dimensions; note that width and
     // height will be significantly larger than specified on retina displays.
     glViewport(0, 0, width, height);
 }
 
+void mouseCallback(GLFWwindow *window, const double xPos, const double yPos) {
+    auto xPosf = static_cast<float>(xPos);
+    auto yPosf = static_cast<float>(yPos);
+
+    if (firstMouse) {
+        lastX = xPosf;
+        lastY = yPosf;
+        firstMouse = false;
+    }
+
+    float xOffset = xPosf - lastX;
+    float yOffset = lastY - yPosf;
+
+    lastX = xPosf;
+    lastY = yPosf;
+
+    camera.ProcessMouseMovement(xOffset, yOffset);
+}
+
+void scrollCallback(GLFWwindow* window, double xOffset, double yOffset) {
+    camera.ProcessMouseScroll(static_cast<float>(yOffset));
+}
